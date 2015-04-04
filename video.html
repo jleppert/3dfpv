@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				font-family: Monospace;
+				background-color: #000;
+				margin: 0px;
+				overflow: hidden;
+			}
+		</style>
+		<title>3D FPV</title>
+	</head>
+	<body>
+
+		<script src="lib/three.js"></script>
+		<script src="lib/jsmpg.js"></script>
+		<script src="lib/render/Projector.js"></script>
+		<script src="lib/render/CanvasRenderer.js"></script>
+		<script src="lib/stats.min.js"></script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+			varying vec2 v_pos;
+  			
+  			void main() {
+      			v_pos = vec2(position.xy);
+      			gl_Position = vec4(position, 1.0);
+      			gl_PointSize = 1.0;
+  			}
+		</script>
+		<script id="fragmentShader" type="x-shader/x-fragment">
+			precision highp float;
+
+		  	uniform float barrel_power;
+		  	vec2 distort(vec2 p) {
+		    	float theta  = atan(p.y, p.x);
+		    	float radius = length(p);
+		    	radius = pow(radius, barrel_power);
+		    	p.x = radius * cos(theta);
+		    	p.y = radius * sin(theta);
+		    	return 0.5 * (p + 1.0);
+		  	}
+
+		  	varying vec2 v_pos;
+		  	uniform sampler2D video;
+
+		  	void main() {
+		  		vec2 d = distort(v_pos);
+		  		if (d.x > 1.0 || d.x < 0.0 || d.y > 1.0 || d.y < 0.0) {
+		  			gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+		  		} else {
+		  			gl_FragColor = texture2D(video, d);
+		    	}
+		  	}
+		</script>
+
+		<script>
+			var container, stats;
+
+			var camera, scene, renderer;
+
+			var leftCanvas, rightCanvas, leftTexture, rightTexture;
+
+			var mesh;
+
+			var mouseX = 0;
+			var mouseY = 0;
+
+			var windowHalfX = window.innerWidth / 2;
+			var windowHalfY = window.innerHeight / 2;
+
+			var container = document.createElement('div');
+			document.body.appendChild(container);
+
+			initLeftEye();
+			initRightEye();
+			animate();
+
+			var leftPlayer, rightPlayer;
+
+			var effect;
+
+			function initLeftEye() {
+				camera = new THREE.PerspectiveCamera(75, (window.innerWidth / 2) / (window.innerHeight / 2), 1, 10000);
+				camera.position.z = 240;
+
+				leftScene = new THREE.Scene();
+
+				var leftClient  = new WebSocket('ws://127.0.0.1:9990');
+
+				leftCanvas = document.createElement('canvas');
+				leftCanvas.width = 1280;
+				leftCanvas.height = 720;
+
+				leftPlayer = new jsmpeg(leftClient, {
+            		canvas: leftCanvas
+        		});
+
+				leftTexture = new THREE.Texture(leftCanvas);
+
+				leftTexture.magFilter = THREE.LinearFilter;
+				leftTexture.minFilter = THREE.LinearFilter;
+				leftTexture.format = THREE.RGBFormat;
+
+				var vertShader = document.getElementById('vertexShader').innerHTML;
+    			var fragShader = document.getElementById('fragmentShader').innerHTML;
+
+				var leftMaterial = new THREE.ShaderMaterial({
+					uniforms: {
+						video: {
+							type: 't',
+							value: leftTexture
+						},
+						barrel_power: {
+							type: 'f',
+							value: 1.5
+						}
+					},
+					vertexShader: vertShader,
+        			fragmentShader: fragShader,
+        			wireframe: false
+				});
+
+				var leftPlane  = new THREE.PlaneGeometry( 1280, 720, 4, 4 );
+
+				leftMesh = new THREE.Mesh(leftPlane, leftMaterial);
+				leftScene.add(leftMesh);
+
+				leftRenderer = new THREE.WebGLRenderer();
+				leftRenderer.setPixelRatio(window.devicePixelRatio);
+				leftRenderer.setSize(window.innerWidth / 2, window.innerHeight);
+				leftRenderer.domElement.id = 'leftGL';
+
+				container.appendChild(leftRenderer.domElement);
+
+				stats = new Stats();
+				stats.domElement.style.position = 'absolute';
+				stats.domElement.style.top = '0px';
+				container.appendChild(stats.domElement);
+
+				window.addEventListener('resize', onWindowResize, false);
+			}
+
+			function initRightEye() {
+				rightScene = new THREE.Scene();
+
+				var rightClient = new WebSocket('ws://127.0.0.1:9991');
+
+				rightCanvas = document.createElement('canvas');
+				rightCanvas.width = 1280;
+				rightCanvas.height = 720;
+
+        		rightClient = new jsmpeg(rightClient, {
+        			canvas: rightCanvas
+        		});
+
+				rightTexture = new THREE.Texture(rightCanvas);
+
+				rightTexture.magFilter = THREE.LinearFilter;
+				rightTexture.minFilter = THREE.LinearFilter;
+				rightTexture.format = THREE.RGBFormat;
+
+				var vertShader = document.getElementById('vertexShader').innerHTML;
+    			var fragShader = document.getElementById('fragmentShader').innerHTML;
+
+				var rightMaterial = new THREE.ShaderMaterial({
+					uniforms: {
+						video: {
+							type: 't',
+							value: rightTexture
+						},
+						barrel_power: {
+							type: 'f',
+							value: 1.5
+						}
+					},
+					vertexShader: vertShader,
+        			fragmentShader: fragShader,
+        			wireframe: false
+				});
+
+				var rightPlane = new THREE.PlaneGeometry( 1280, 720, 4, 4 );
+
+				rightMesh = new THREE.Mesh(rightPlane, rightMaterial);
+				rightScene.add(rightMesh);
+
+				rightRenderer = new THREE.WebGLRenderer();
+				rightRenderer.setPixelRatio(window.devicePixelRatio);
+				rightRenderer.setSize(window.innerWidth / 2, window.innerHeight);
+				
+				rightRenderer.domElement.id = 'rightGL';
+				container.appendChild(rightRenderer.domElement);
+			}
+
+			function animate() {
+				requestAnimationFrame(animate);
+				render();
+				stats.update();
+			}
+
+			function render() {
+				if (leftTexture)  leftTexture.needsUpdate = true;
+				if (rightTexture) rightTexture.needsUpdate = true;
+
+				leftRenderer.render(leftScene, camera);
+				rightRenderer.render(rightScene, camera);
+			}
+		</script>
+	</body>
+</html>
